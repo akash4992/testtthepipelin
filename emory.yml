@@ -1,0 +1,57 @@
+name: Crud-application-OIDC
+
+on:
+  push:
+    branches:
+      - DO-191
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+
+  build-and-deploy:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: "arn:aws:iam::674364651698:role/Emory-oidc-cicd-poc-role-o1"
+          role-session-name: samplerolesession
+          aws-region: "us-east-1"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Set up Docker tags
+        id: tags
+        run: |
+          echo "SHA_TAG=${GITHUB_SHA::8}" >> $GITHUB_ENV
+          echo "REPO_NAME=emory-cicd-crud" >> $GITHUB_ENV
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          SHA_TAG: ${{ env.SHA_TAG }}
+          REPO_NAME: ${{ env.REPO_NAME }}
+        run: |
+          docker build -t $ECR_REGISTRY/$REPO_NAME:$SHA_TAG -t $ECR_REGISTRY/$REPO_NAME:latest .
+          docker push $ECR_REGISTRY/$REPO_NAME:$SHA_TAG
+          docker push $ECR_REGISTRY/$REPO_NAME:latest

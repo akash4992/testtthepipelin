@@ -1,0 +1,57 @@
+name: ECS Deployment
+on:
+  push:
+    paths:
+      - 'complexityAI/**'
+      - 'episode_manager_br/**'
+      - 'etiologyAI/**'
+      - 'protocolAI/**'
+      - 'rafAI/**'
+    branches:
+      - main
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+      - name: Detect changed directories
+        id: set-matrix
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD | grep -E '^(complexityAI|episode_manager_br|etiologyAI|protocolAI|rafAI)/' | cut -d/ -f1 | sort -u | jq -R -s -c 'split("\n")[:-1]')
+          echo "matrix=${CHANGED}" >> $GITHUB_OUTPUT
+  build-and-deploy:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.matrix != '[]' }}
+    strategy:
+      matrix:
+        app: ${{fromJson(needs.detect-changes.outputs.matrix)}}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO_NAME: ${{ matrix.app }}
+        run: |
+          docker build -t $ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG \
+                      -t $ECR_REGISTRY/$REPO_NAME:$IMAGE_LATEST \
+                      ./${{ matrix.app }}
+          docker push $ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$REPO_NAME:$IMAGE_LATEST
+      - name: Update ECS service
+        run: |
+          aws ecs update-service --cluster ${{ secrets.ECS_CLUSTER }} \
+                                --service ${{ matrix.app }}-service \
+                                --force-new-deployment

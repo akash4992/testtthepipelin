@@ -1,0 +1,93 @@
+name: Crud-application-OIDC
+
+on:
+  push:
+    paths:
+      - 'complexityAI/**'
+    branches:
+      - DO-191
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+        default: 'dev'
+
+env:
+  ECR_REPOSITORY: complexity-ai
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+  DEPLOY_ENV: ${{ github.event.inputs.environment || 'dev' }}
+
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          
+      - name: Detect changed directories
+        id: set-matrix
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD | grep -E '^(complexityAI)/' | cut -d/ -f1 | sort -u | jq -R -s -c 'split("\n")[:-1]')
+          echo "::set-output name=matrix::$CHANGED"
+
+
+  build-and-deploy:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Set up Docker tags
+        id: tags
+        run: |
+          echo "SHA_TAG=${GITHUB_SHA::8}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          SHA_TAG: ${{ env.SHA_TAG }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$SHA_TAG \
+                      -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$SHA_TAG
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+
+      - name: Update ECS service
+        env:
+          TASK_DEFINTION_NAME: ${{ secrets.TASK_DEFINITION_NAME }}
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.DEPLOY_ENV }}-complexity-ai \
+            --task-definition "${TASK_DEFINITION_NAME}" \
+            --force-new-deployment || exit 1
+          echo "ECS service updated for environment: ${{ env.DEPLOY_ENV }}"
