@@ -16,7 +16,7 @@ on:
         options:
           - dev
           - staging
-          - prod
+          - Production
 
 env:
   ECR_REPOSITORY: complexity-ai
