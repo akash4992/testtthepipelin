@@ -48,8 +48,7 @@ jobs:
           fi
 
       - name: Print Environment Name
-        run: echo "Environment: $ENV_NAME"
-
+        run: echo "Environment": ${{env.ENV_NAME}}
       - uses: actions/checkout@v4
         with:
           ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
