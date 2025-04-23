@@ -18,7 +18,7 @@ on:
           - dev1
           - dev2
           - qa
-          
+
 permissions:
   id-token: write
   contents: write
@@ -43,6 +43,10 @@ jobs:
       - name: set current version from file
         id: set_current_version
         run: echo "CURRENT_VERSION=$(cat version.txt)" >> $GITHUB_ENV
+
+      - name: Print Environment Name
+        run: echo "Environment: ${{ job.environment.name }}"
+
       - uses: actions/setup-go@v5
         with:
           go-version: "stable"
@@ -54,6 +58,7 @@ jobs:
       - uses: bufbuild/buf-setup-action@v1.50.0
         with:
           github_token: ${{ github.token }}
+
       - uses: sqlc-dev/setup-sqlc@v4
         with:
           sqlc-version: "1.28.0"
@@ -65,6 +70,7 @@ jobs:
           chmod +x mockery
           sudo mv mockery /usr/local/bin/
           which mockery
+
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: 3.7.0
@@ -95,6 +101,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
           role-session-name: github-oidc
           aws-region: ${{ env.AWS_REGION }}
+
       - run: aws sts get-caller-identity
 
       - name: Login to Amazon ECR
@@ -107,7 +114,7 @@ jobs:
         with:
           current-version: ${{ env.CURRENT_VERSION }}
           version-fragment: "patch"
-      
+
       - name: Build Docker image
         id: docker-build
         env:
@@ -174,6 +181,7 @@ jobs:
 
       - name: Update Version File
         run: echo "${{ steps.bump_version.outputs.next-version }}" > version.txt
+
       - name: Commit Version File
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
