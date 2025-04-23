@@ -11,11 +11,6 @@ on:
       environment:
         description: 'Environment to deploy to'
         required: true
-        type: choice
-        options:
-          - dev
-        default: 'dev'
-
 env:
   ECR_REPOSITORY: complexity-ai
   AWS_REGION: ${{ secrets.AWS_REGION }}
