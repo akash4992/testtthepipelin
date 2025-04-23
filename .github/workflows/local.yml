@@ -12,11 +12,6 @@ on:
         description: 'Environment to deploy to'
         required: true
         type: environment
-        type: choice
-        options:
-          - dev
-          - staging
-          - Production
 
 env:
   ECR_REPOSITORY: complexity-ai
