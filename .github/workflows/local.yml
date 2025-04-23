@@ -1,6 +1,9 @@
 name: print-environment
 
 on:
+  push:
+    branches:
+      - '**'  # Trigger on all branches
   workflow_dispatch:
     inputs:
       environment:
@@ -16,11 +19,20 @@ on:
 
 jobs:
   print-env:
-    name: Print Selected Environment
+    name: Print Environment
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set and Print Environment
+      - name: Determine Environment
         run: |
-          ENV_NAME="${{ github.event.inputs.environment }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV_NAME="${{ github.event.inputs.environment }}"
+          elif [[ "${{ github.ref_name }}" == "main" ]]; then
+            ENV_NAME="production"
+          elif [[ "${{ github.ref_name }}" == "develop" ]]; then
+            ENV_NAME="development"
+          else
+            ENV_NAME="${{ github.ref_name }}"
+          fi
+
           echo "Selected Environment: $ENV_NAME"
