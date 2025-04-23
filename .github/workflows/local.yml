@@ -1,12 +1,7 @@
 name: build-deploy-go-api
 
 on:
-  push:
-    branches:
-      - develop
-      - qa
-      - staging
-      - main
+  
 
   workflow_dispatch:
     inputs:
