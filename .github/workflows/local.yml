@@ -1,37 +1,196 @@
-name: Crud-application-OIDC
+name: build-deploy-go-api
 
 on:
   push:
-    paths:
-      - 'complexityAI/**'
     branches:
-      - DO-191
+      - develop
+      - qa
+      - staging
+      - main
+
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy to'
-        required: true
         type: environment
+        required: true
+        description: Select the environment
+        type: choice
+        options:
+          - dev1
+          - dev2
+          - qa
+          
+permissions:
+  id-token: write
+  contents: write
 
 env:
-  ECR_REPOSITORY: complexity-ai
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-  DEPLOY_ENV: ${{ github.event.inputs.environment || 'dev' }}
+  IMAGE_TAG: latest
+  GOPRIVATE: github.com/tissue-health-plus
+  AWS_REGION: "us-east-1"
 
 jobs:
-  detect-changes:
+  build:
+    name: Build and Deploy go-api
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 2
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}
 
-      - name: Detect changed directories
-        id: set-matrix
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{secrets.SSH_PRIVATE_KEY}}
+
+      - name: set current version from file
+        id: set_current_version
+        run: echo "CURRENT_VERSION=$(cat version.txt)" >> $GITHUB_ENV
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true
+
+      - name: Install Go Tools
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - uses: bufbuild/buf-setup-action@v1.50.0
+        with:
+          github_token: ${{ github.token }}
+      - uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.28.0"
+
+      - name: Install Mockery
         run: |
-          CHANGED=$(git diff --name-only HEAD^ HEAD | grep -E '^(complexityAI)/' | cut -d/ -f1 | sort -u | jq -R -s -c 'split("\n")[:-1]')
-          echo "matrix=$CHANGED" >> $GITHUB_OUTPUT_
+          curl -L -o mockery.tar.gz https://github.com/vektra/mockery/releases/download/v2.53.3/mockery_2.53.3_Linux_x86_64.tar.gz
+          tar -xzf mockery.tar.gz
+          chmod +x mockery
+          sudo mv mockery /usr/local/bin/
+          which mockery
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.7.0
+
+      - name: Code Gen
+        run: make code-gen-ci
+
+      - name: Tests
+        run: make ci-test-coverage
+
+      - name: Vulnerability Check
+        run: |
+          govulncheck ./... | tee vuln-report.txt
+          if ! grep -q "No vulnerabilities found." vuln-report.txt; then
+            echo "::error::Vulnerabilities found! See details in the log"
+            cat vuln-report.txt
+            exit 1
+          fi
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+          role-session-name: github-oidc
+          aws-region: ${{ env.AWS_REGION }}
+      - run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Bump release version
+        id: bump_version
+        uses: christian-draeger/increment-semantic-version@1.2.0
+        with:
+          current-version: ${{ env.CURRENT_VERSION }}
+          version-fragment: "patch"
+      
+      - name: Build Docker image
+        id: docker-build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          PROTO_VERSION: ${{ steps.bump_version.outputs.next-version }}
+        run: |
+          docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG || true
+          docker build --build-arg SSH_PRIVATE_KEY="${SSH_PRIVATE_KEY}" --build-arg PROTO_VERSION="${PROTO_VERSION}" --cache-from $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA -f deployment/Dockerfile .
+
+      - name: Scan Docker image with Trivy
+        if: contains('dev1,dev2,development', job.environment.name)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.SHA_TAG }}
+          format: "table"
+          output: "trivy-scan-report.txt"
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: "CRITICAL,HIGH"
+          scanners: "vuln"
+
+      - name: Upload Trivy Report
+        if: contains('dev1,dev2,development', job.environment.name)
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-report-${{ matrix.directory }}
+          path: trivy-scan-report.txt
+
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Deploy to ECS
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          CLUSTER_NAME: ${{ env.CLUSTER_NAME }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+        run: |
+          aws ecs update-service \
+            --region "${AWS_REGION}" \
+            --cluster "${CLUSTER_NAME}" \
+            --service "${SERVICE_NAME}" \
+            --force-new-deployment
+
+      - name: Wait for ECS deployment to stabilize
+        id: wait-for-stabilization
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          CLUSTER_NAME: ${{ env.CLUSTER_NAME }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+        run: |
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --region "${AWS_REGION}" \
+            --cluster "${CLUSTER_NAME}" \
+            --services "${SERVICE_NAME}"
+          echo "ECS service is stable!"
+
+      - name: Update Version File
+        run: echo "${{ steps.bump_version.outputs.next-version }}" > version.txt
+      - name: Commit Version File
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bump version"
+          file_pattern: "version.txt"
+          tagging_message: "v${{ steps.bump_version.outputs.next-version }}"
+
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "channel": "#deployment-notification",
+              "username": "deployments",
+              "text": "Deployed APP-API version (${{ steps.bump_version.outputs.next-version }}) to ${{ github.event.inputs.environment }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "icon_emoji": ":loudspeaker:"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
