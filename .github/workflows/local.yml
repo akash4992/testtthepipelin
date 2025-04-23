@@ -11,7 +11,12 @@ on:
       environment:
         description: 'Environment to deploy to'
         required: true
-        type: environment  # Enables the GUI dropdown for environments
+        type: environment
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
 
 env:
   ECR_REPOSITORY: complexity-ai
