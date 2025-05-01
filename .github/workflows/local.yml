@@ -18,7 +18,7 @@ on:
           - dev1
           - dev2
           - qa
-          
+
 permissions:
   id-token: write
   contents: write
@@ -34,7 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}
-      
+
+    steps:
+      - name: Install Go Tools
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
       - name: Check environment for ECS Values
         id: env-check
         run: |
@@ -57,7 +61,7 @@ jobs:
             echo "ECR_REPOSITORY=staging-go-api" >> $GITHUB_ENV
             echo "ECS_CLUSTER=staging-cluster" >> $GITHUB_ENV
             echo "SERVICE_NAME=staging-go-api" >> $GITHUB_ENV
-          
+
           elif [[ "${{ env.ENVIRONMENT_NAME }}" == "production" ]]; then
             echo "ECR_REPOSITORY=prod-app-api" >> $GITHUB_ENV
             echo "ECS_CLUSTER=production-cluster" >> $GITHUB_ENV
@@ -65,16 +69,16 @@ jobs:
 
           else
             echo "No valid environment specified"
-          fi
+            exit 1
 
       - name: Wait for ECS deployment to stabilize
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
-          CLUSTER_NAME: ${{ env.CLUSTER_NAME }}
+          CLUSTER_NAME: ${{ env.ECS_CLUSTER }}
           SERVICE_NAME: ${{ env.SERVICE_NAME }}
           REO_NAME: ${{ env.ECR_REPOSITORY }}
         run: |
-          echo "${AWS_REGION}" \
-          echo "${SERVICE_NAME}" \
-          echo "${REO_NAME}" \
-          echo "${CLUSTER_NAME}"
+          echo "AWS Region: ${AWS_REGION}"
+          echo "Service Name: ${SERVICE_NAME}"
+          echo "Repository Name: ${REO_NAME}"
+          echo "Cluster Name: ${CLUSTER_NAME}"
