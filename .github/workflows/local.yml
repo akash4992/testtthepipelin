@@ -34,9 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}
-
-      - name: Install Go Tools
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
       
       - name: Check environment for ECS Values
         id: env-check
