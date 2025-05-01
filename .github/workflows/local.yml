@@ -1,38 +1,83 @@
-name: print-environment
+name: build-deploy-go-api
 
 on:
   push:
     branches:
-      - '**'  # Trigger on all branches
+      - develop
+      - qa
+      - staging
+      - main
+
   workflow_dispatch:
     inputs:
       environment:
         required: true
-        description: "Select the environment"
+        description: Select the environment
         type: choice
         options:
           - dev1
           - dev2
           - qa
-          - staging
-          - production
+          
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  IMAGE_TAG: latest
+  AWS_REGION: "us-east-1"
+  ENVIRONMENT_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}
 
 jobs:
-  print-env:
-    name: Print Environment
+  build:
+    name: Build and Deploy go-api
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}
 
-    steps:
-      - name: Determine Environment
+      - name: Install Go Tools
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      
+      - name: Check environment for ECS Values
+        id: env-check
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            ENV_NAME="${{ github.event.inputs.environment }}"
-          elif [[ "${{ github.ref_name }}" == "main" ]]; then
-            ENV_NAME="production"
-          elif [[ "${{ github.ref_name }}" == "develop" ]]; then
-            ENV_NAME="development"
+          if [[ "${{ env.ENVIRONMENT_NAME }}" == "development" ]]; then
+            echo "ECR_REPOSITORY=development-go-api" >> $GITHUB_ENV
+            echo "ECS_CLUSTER=development-cluster" >> $GITHUB_ENV
+            echo "SERVICE_NAME=dev-go-api" >> $GITHUB_ENV
+
+          elif [[ "${{ env.ENVIRONMENT_NAME }}" == "dev2" ]]; then
+            echo "ECR_REPOSITORY=dev2-app-api" >> $GITHUB_ENV
+            echo "ECS_CLUSTER=development-cluster" >> $GITHUB_ENV
+            echo "SERVICE_NAME=dev2-app-api" >> $GITHUB_ENV
+
+          elif [[ "${{ env.ENVIRONMENT_NAME }}" == "qa" ]]; then
+            echo "ECR_REPOSITORY=qa-go-api" >> $GITHUB_ENV
+            echo "ECS_CLUSTER=qa-cluster" >> $GITHUB_ENV
+            echo "SERVICE_NAME=qa-go-api" >> $GITHUB_ENV
+
+          elif [[ "${{ env.ENVIRONMENT_NAME }}" == "staging" ]]; then
+            echo "ECR_REPOSITORY=staging-go-api" >> $GITHUB_ENV
+            echo "ECS_CLUSTER=staging-cluster" >> $GITHUB_ENV
+            echo "SERVICE_NAME=staging-go-api" >> $GITHUB_ENV
+          
+          elif [[ "${{ env.ENVIRONMENT_NAME }}" == "production" ]]; then
+            echo "ECR_REPOSITORY=prod-app-api" >> $GITHUB_ENV
+            echo "ECS_CLUSTER=production-cluster" >> $GITHUB_ENV
+            echo "SERVICE_NAME=prod-app-api" >> $GITHUB_ENV
+
           else
-            ENV_NAME="${{ github.ref_name }}"
+            echo "No valid environment specified"
           fi
 
-          echo "Selected Environment: $ENV_NAME"
+      - name: Wait for ECS deployment to stabilize
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          CLUSTER_NAME: ${{ env.CLUSTER_NAME }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          REO_NAME: ${{ env.ECR_REPOSITORY }}
+        run: |
+          echo "${AWS_REGION}" \
+          echo "${SERVICE_NAME}" \
+          echo "${REO_NAME}" \
+          echo "${CLUSTER_NAME}"
