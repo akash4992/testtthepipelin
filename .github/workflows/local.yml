@@ -26,7 +26,7 @@ permissions:
 env:
   IMAGE_TAG: latest
   AWS_REGION: "us-east-1"
-  ENVIRONMENT_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}
+  ENVIRONMENT_NAME: "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.ref_name == 'main' && 'production' || github.ref_name == 'develop' && 'development' || github.ref_name }}"
 
 jobs:
   build:
